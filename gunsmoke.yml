@@ -1,0 +1,282 @@
+# vi: set ft=yaml.ansible :
+# TODO: add variable for dot path
+---
+- name: Get cultured and watch you some Gunsmoke baby
+  hosts: localhost
+  become: yes
+  gather_facts: no
+  pre_tasks:
+    - name: Update dnf cache
+      raw: sudo dnf -y update -x kernel*
+  vars:
+    docker_repo_version: 39
+    fedora_release: rawhide
+    golang_version: 1.22.0
+    hack_font_version: 2.0.0 
+    terraform_version: 1.7.0
+    users:
+        - root
+        - x4192
+
+  tasks:
+
+  - name: Nodebug Kernels
+    block:
+      - name: Add Nodebug Kernels repository
+        command: sudo dnf config-manager --add-repo=https://dl.fedoraproject.org/pub/alt/rawhide-kernel-nodebug/fedora-rawhide-kernel-nodebug.repo
+        ignore_errors: yes  # Ignoring errors if the repository is already added
+
+      - name: Upgrade with Nodebug Kernels
+        command: sudo dnf upgrade
+      become: true  # Run tasks with elevated privileges
+    
+
+  - name: Create temporary directories
+    file:
+      path: "./{{ item }}"
+      state: directory
+    with_items:
+      - tmp
+      - tmp-downloads
+
+  - name: Enable dnf cache
+    lineinfile:
+      path: /etc/dnf/dnf.conf
+      line: 'keepcache=1'
+      state: present
+
+  - name: Fetch rpm fusion packages
+    get_url:
+      url: https://download1.rpmfusion.org/{{ item }}/fedora/rpmfusion-{{ item }}-release-{{ fedora_release }}.noarch.rpm
+      dest: ./tmp-downloads/rpmfusion-{{ item }}-release-{{ fedora_release }}.noarch.rpm
+      mode: 0744
+    with_items:
+      - free
+      - nonfree
+
+  - shell: ls ./tmp-downloads/rpmfusion*
+    register: rpmfusion_repos
+
+  - name: Install rpm fusion repos
+    become: yes
+    dnf:
+      name: "./tmp-downloads/rpmfusion-{{ item }}-release-{{ fedora_release }}.noarch.rpm"
+      disable_gpg_check: yes
+      state: present
+    with_items:
+      - free
+      - nonfree
+
+  - name: Install fedora workstation repositories
+    dnf:
+      name: fedora-workstation-repositories
+      state: present
+
+  - name: Remove libreoffice packages
+    raw: sudo dnf -y remove libreoffice*
+
+  - name: Remove unwanted packages
+    dnf:
+      name: ['abrt', 'abrt-cli', 'abrt-desktop']
+      state: absent
+
+  - name: Install required packages
+    dnf:
+      name:
+        - 'gnome-tweak-tool'
+        - 'nmap'
+        - 'pandoc'
+        - 'tree'
+        - 'unrar'
+        - 'vim'
+        - 'pcre-tools'
+      state: present
+
+  - name: Setup machine for kvm virtualization
+    dnf:
+      name:
+        - 'bridge-utils'
+        - 'libguestfs-tools'
+        - 'python-libguestfs'
+        - 'virt-top'
+        - '@virtualization'
+      state: present
+
+  - name: Create libvirt group
+    group:
+      name: libvirt
+      state: present
+
+  - name: Add x4192 to libvirt group
+    user:
+      name: x4192
+      groups: libvirt
+      append: yes
+
+  - name: Create polkit rules file
+    file:
+      path: /etc/polkit-1/rules.d/80-libvirt.rules
+      owner: root
+      group: root
+      mode: 0644
+      state: touch
+
+  - name: Update libvirtd.conf to grant access to an unprivilaged user
+    replace:
+      path: /etc/libvirt/libvirtd.conf
+      regexp: "{{ item.regexp }}"
+      replace: "{{ item.replace }}"
+    with_items:
+      - { regexp: '^#unix_sock_group = "libvirt"', replace: 'unix_sock_group = "libvirt"' }
+      - { regexp: '^#unix_sock_rw_perms = "0770"', replace: 'unix_sock_rw_perms = "0770"'}
+
+  - name: Edit polkit rules for granting access to an unprivilaged user to libvirt APIs
+    copy:
+      content: |
+        polkit.addRule(function(action, subject) {
+        if (action.id == "org.libvirt.unix.manage" && subject.isInGroup("libvirt")) {
+        return polkit.Result.YES;
+        }
+        });
+      dest: /etc/polkit-1/rules.d/80-libvirt.rules
+
+  - name: Fetch terraform zip archive
+    get_url:
+      url: https://releases.hashicorp.com/terraform/{{ terraform_version }}/terraform_{{ terraform_version }}_linux_amd64.zip
+      dest: ./tmp-downloads/terraform.zip
+
+  - name: Unzip terraform zip archive
+    unarchive:
+      src: ./tmp-downloads/terraform.zip
+      dest: ./tmp/
+
+  - name: Install terraform
+    copy:
+      src: ./tmp/terraform
+      dest: /usr/local/bin
+      owner: root
+      group: root
+      mode: 0755
+
+  # TODO: this used to have docker shit, needs cleaning
+  - name: Install dnf development packages
+    dnf:
+      name:
+        - 'httpie'
+        - 'python3-lxml'
+        - 'python3-neovim'
+        - 'python3-psutil'
+        - 'python3-virtualenv'
+        - 'supervisor'
+        - 'tunctl'
+        - 'util-linux-user'
+      state: present
+      enablerepo: "{{ item }}"
+      exclude: podman-docker
+    with_items:
+      - docker-ce
+    notify:
+      - Enable supervisord service
+
+  - name: Fetch golang tarball
+    get_url: 
+      url: https://dl.google.com/go/go{{ golang_version }}.linux-amd64.tar.gz
+      dest: ./tmp-downloads/go{{ golang_version }}.linux-amd64.tar.gz
+      mode: 0755
+      owner: x4192
+      group: x4192
+
+  - name: Extract tarball
+    become: yes
+    command: tar -C /usr/local/ -xvzf ./tmp-downloads/go{{ golang_version }}.linux-amd64.tar.gz
+
+  - name: Ensure Repos/madgrid directory exists
+    become_user: x4192
+    file:
+      path: "~/Repos/madgrid"
+      state: directory
+
+  - name: Clone dotfiles repo
+    become_user: x4192
+    git:
+      repo: https://github.com/madgrid/dot.git
+      clone: yes
+      dest: ~x4192/Repos/madgrid
+
+  - name: Install pip development packages
+    pip:
+      name: [ 'fabric3', 'icdiff' ]
+      state: present
+      executable: pip3
+
+  - name: Create docker group
+    group:
+      name: docker
+      state: present
+
+  - name: Add x4192 to docker group
+    user:
+      name: x4192
+      groups: docker
+      append: yes
+    notify:
+      - Enable docker systemd service
+      - Start docker systemd service
+
+  tasks:
+    - name: Run setup script for symbolic links
+      command: "/home/x4192/Repos/madgrid/setup/create_symlinks.sh"
+      become_user: x4192
+      become: yes
+      args:
+        chdir: "/home/x4192/Repos/madgrid/dot"
+
+    - name: Set execute permissions on the setup script
+      command: chmod +x setup
+      become_user: x4192
+      become: yes
+      args:
+        chdir: "/home/x4192/Repos/madgrid/dot"
+
+    - name: Run setup script for symbolic links
+      command: "./setup"
+      become_user: x4192
+      become: yes
+      args:
+        chdir: "/home/x4192/Repos/madgrid/dot"
+
+  - name: Add flathub remote
+    flatpak_remote:
+      name: flathub
+      flatpakrepo_url: https://flathub.org/repo/flathub.flatpakrepo
+      state: present
+
+  - name: Install required flatpaks
+    flatpak:
+      name: "{{ item }}"
+      state: present
+    with_items:
+      - org.develz.Crawl
+      - org.telegram.desktop
+      - org.mozilla.Thunderbird
+      - ca.desrt.dconf-editor
+      - com.bitwarden.desktop
+      - org.gnome.Logs
+      - org.libreoffice.LibreOffice
+      - org.videolan.VLC
+
+  handlers:
+  
+  - name: Clean dnf metadata
+    become: yes
+    command: dnf clean metadata
+
+  - name: Update dnf cache
+    become: yes
+    command: dnf makecache
+
+  - name: Enable supervisord service
+    become: yes
+    systemd:
+      name: supervisord
+      enabled: yes
