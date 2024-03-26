@@ -190,18 +190,18 @@
     become: yes
     command: tar -C /usr/local/ -xvzf ./tmp-downloads/go{{ golang_version }}.linux-amd64.tar.gz
 
-  - name: Ensure Repos/madgrid directory exists
+  - name: Ensure Repos/iviixii directory exists
     become_user: x4192
     file:
-      path: "~/Repos/madgrid"
+      path: "~/Repos/iviixii"
       state: directory
 
   - name: Clone dotfiles repo
     become_user: x4192
     git:
-      repo: https://github.com/madgrid/dot.git
+      repo: https://github.com/iviixii/dot.git
       clone: yes
-      dest: ~x4192/Repos/madgrid
+      dest: ~x4192/Repos/iviixii
 
   - name: Install pip development packages
     pip:
@@ -225,25 +225,25 @@
 
   tasks:
     - name: Run setup script for symbolic links
-      command: "/home/x4192/Repos/madgrid/setup/create_symlinks.sh"
+      command: "/home/x4192/Repos/iviixii/setup/create_symlinks.sh"
       become_user: x4192
       become: yes
       args:
-        chdir: "/home/x4192/Repos/madgrid/dot"
+        chdir: "/home/x4192/Repos/iviixii/dot"
 
     - name: Set execute permissions on the setup script
       command: chmod +x setup
       become_user: x4192
       become: yes
       args:
-        chdir: "/home/x4192/Repos/madgrid/dot"
+        chdir: "/home/x4192/Repos/iviixii/dot"
 
     - name: Run setup script for symbolic links
       command: "./setup"
       become_user: x4192
       become: yes
       args:
-        chdir: "/home/x4192/Repos/madgrid/dot"
+        chdir: "/home/x4192/Repos/iviixii/dot"
 
   - name: Add flathub remote
     flatpak_remote:
